@@ -1,0 +1,787 @@
+项目 'dreaminterpreter-2api' 的结构树:
+📂 dreaminterpreter-2api/
+    📄 .env
+    📄 .env.example
+    📄 Dockerfile
+    📄 docker-compose.yml
+    📄 main.py
+    📄 nginx.conf
+    📄 requirements.txt
+    📂 app/
+        📂 core/
+            📄 __init__.py
+            📄 config.py
+        📂 providers/
+            📄 __init__.py
+            📄 base_provider.py
+            📄 dreaminterpreter_provider.py
+        📂 utils/
+            📄 sse_utils.py
+    📂 static/
+        📄 index.html
+        📄 script.js
+        📄 style.css
+================================================================================
+
+--- 文件路径: .env ---
+
+# [自动填充] dreaminterpreter-2api 生产环境配置
+# 该文件由 Project Chimera 自动生成，可直接用于一键部署。
+
+# --- 安全配置 ---
+# 用于保护您的 API 服务的访问密钥，请按需修改为您自己的复杂密钥。
+API_MASTER_KEY=1
+
+# --- 端口配置 ---
+# Nginx 对外暴露的端口
+NGINX_PORT=8090
+
+# --- Dream Interpreter 凭证 ---
+# 【关键修正】已将 Cookie 中的 "$" 字符转义为 "$$" 以防止 Docker Compose 变量替换警告。
+DREAMINTERPRETER_COOKIE="_gid=GA1.2.97987403.1760801156; _ga_NLE2X95C95=GS2.1.s1760801545$$o1$$g1$$t1760801631$$j42$$l0$$h0; _ga_BGQYNX5K42=GS2.1.s1760801155$$o1$$g1$$t1760801645$$j27$$l0$$h0; _ga=GA1.2.583687601.1760801155"
+
+
+--- 文件路径: .env.example ---
+
+# ====================================================================
+# dreaminterpreter-2api 配置文件模板
+# ====================================================================
+#
+# 请将此文件重命名为 ".env" 并填入您的凭证。
+#
+
+# --- 核心安全配置 (必须设置) ---
+# 用于保护您 API 服务的访问密钥。
+API_MASTER_KEY=sk-dreaminterpreter-2api-default-key-please-change-me
+
+# --- 部署配置 (可选) ---
+# Nginx 对外暴露的端口
+NGINX_PORT=8090
+
+# --- Dream Interpreter 凭证 (必须设置) ---
+# 1. 登录 https://dreaminterpreter.ai/
+# 2. 按 F12 打开开发者工具，切换到“网络”(Network) 面板。
+# 3. 输入一个梦境并点击“解释梦”。
+# 4. 在网络请求列表中，找到对 "dreaminterpreter.ai" 的 POST 请求。
+# 5. 在“标头”(Headers) -> “请求标头”(Request Headers) 中，找到并复制完整的 "cookie" 值。
+# 注意：如果您的 Cookie 值中包含 "$" 符号，请手动将其替换为 "$$" (例如, "$o1" 应改为 "$$o1")。
+DREAMINTERPRETER_COOKIE="在此处粘贴您的完整 Cookie 字符串"
+
+
+--- 文件路径: Dockerfile ---
+
+# ====================================================================
+# Dockerfile for dreaminterpreter-2api (v1.0 - Chimera Edition)
+# ====================================================================
+
+# --- Build Stage ---
+FROM python:3.10-slim as builder
+
+WORKDIR /app
+
+# 安装依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# --- Final Stage ---
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# 从 builder 阶段复制已安装的依赖
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# 复制应用代码
+COPY . .
+
+# 创建并切换到非 root 用户
+RUN useradd --create-home appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+# 暴露端口并启动
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+
+--- 文件路径: docker-compose.yml ---
+
+services:
+  nginx:
+    image: nginx:latest
+    container_name: dreaminterpreter-2api-nginx
+    restart: always
+    ports:
+      - "${NGINX_PORT:-8090}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+    networks:
+      - dreaminterpreter-net
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dreaminterpreter-2api-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - dreaminterpreter-net
+
+networks:
+  dreaminterpreter-net:
+    driver: bridge
+
+
+--- 文件路径: main.py ---
+
+import logging
+from contextlib import asynccontextmanager
+from typing import Optional
+
+from fastapi import FastAPI, Request, HTTPException, Depends, Header
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.core.config import settings
+from app.providers.dreaminterpreter_provider import DreamInterpreterProvider
+
+# --- 日志配置 ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- 全局 Provider 实例 ---
+provider = DreamInterpreterProvider()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(f"应用启动中... {settings.APP_NAME} v{settings.APP_VERSION}")
+    logger.info("服务已进入 'Cloudscraper' 模式，将自动处理 Cloudflare 挑战。")
+    logger.info(f"API 服务将在 http://localhost:{settings.NGINX_PORT} 上可用")
+    logger.info(f"Web UI 测试界面已启用，请访问 http://localhost:{settings.NGINX_PORT}/")
+    yield
+    logger.info("应用关闭。")
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    description=settings.DESCRIPTION,
+    lifespan=lifespan
+)
+
+# --- 挂载静态文件目录 ---
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# --- 安全依赖 ---
+async def verify_api_key(authorization: Optional[str] = Header(None)):
+    if settings.API_MASTER_KEY and settings.API_MASTER_KEY != "1":
+        if not authorization or "bearer" not in authorization.lower():
+            raise HTTPException(status_code=401, detail="需要 Bearer Token 认证。")
+        token = authorization.split(" ")[-1]
+        if token != settings.API_MASTER_KEY:
+            raise HTTPException(status_code=403, detail="无效的 API Key。")
+
+# --- API 路由 ---
+@app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
+async def chat_completions(request: Request):
+    try:
+        request_data = await request.json()
+        return await provider.chat_completion(request_data)
+    except Exception as e:
+        logger.error(f"处理聊天请求时发生顶层错误: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"内部服务器错误: {str(e)}")
+
+@app.get("/v1/models", dependencies=[Depends(verify_api_key)], response_class=JSONResponse)
+async def list_models():
+    return await provider.get_models()
+
+# --- Web UI 路由 ---
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def serve_ui():
+    try:
+        with open("static/index.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="UI 文件 (static/index.html) 未找到。")
+
+
+--- 文件路径: nginx.conf ---
+
+worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    upstream dreaminterpreter_backend {
+        # 使用 ip_hash 确保来自同一客户端的请求被转发到同一个 worker
+        # 这对于 cloudscraper 维持 Cloudflare 会话至关重要
+        ip_hash;
+        server app:8000;
+    }
+
+    server {
+        listen 80;
+        server_name localhost;
+
+        location / {
+            proxy_pass http://dreaminterpreter_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            
+            # 流式传输优化
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_set_header Connection '';
+            proxy_http_version 1.1;
+            chunked_transfer_encoding off;
+        }
+    }
+}
+
+
+--- 文件路径: requirements.txt ---
+
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-dotenv
+cloudscraper
+httpx
+python-multipart
+
+
+--- 文件路径: app\core\__init__.py ---
+
+
+
+--- 文件路径: app\core\config.py ---
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import List, Optional
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding='utf-8',
+        extra="ignore"
+    )
+
+    APP_NAME: str = "dreaminterpreter-2api"
+    APP_VERSION: str = "1.0.0"
+    DESCRIPTION: str = "一个将 dreaminterpreter.ai 转换为兼容 OpenAI 格式 API 的高性能代理。"
+
+    API_MASTER_KEY: Optional[str] = None
+    DREAMINTERPRETER_COOKIE: Optional[str] = None
+
+    API_REQUEST_TIMEOUT: int = 180
+    NGINX_PORT: int = 8090
+
+    DEFAULT_MODEL: str = "dream-interpreter-pro"
+    KNOWN_MODELS: List[str] = ["dream-interpreter-pro"]
+
+settings = Settings()
+
+
+--- 文件路径: app\providers\__init__.py ---
+
+
+
+--- 文件路径: app\providers\base_provider.py ---
+
+from abc import ABC, abstractmethod
+from typing import Dict, Any
+from fastapi.responses import StreamingResponse, JSONResponse
+
+class BaseProvider(ABC):
+    @abstractmethod
+    async def chat_completion(
+        self,
+        request_data: Dict[str, Any]
+    ) -> StreamingResponse:
+        pass
+
+    @abstractmethod
+    async def get_models(self) -> JSONResponse:
+        pass
+
+
+--- 文件路径: app\providers\dreaminterpreter_provider.py ---
+
+import asyncio
+import json
+import logging
+import time
+import uuid
+from typing import Dict, Any, AsyncGenerator, Tuple
+
+import cloudscraper
+from fastapi import HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
+
+from app.core.config import settings
+from app.providers.base_provider import BaseProvider
+from app.utils.sse_utils import create_sse_data, create_chat_completion_chunk, DONE_CHUNK
+
+logger = logging.getLogger(__name__)
+
+class DreamInterpreterProvider(BaseProvider):
+    def __init__(self):
+        self.scraper = cloudscraper.create_scraper()
+        self.api_url = "https://dreaminterpreter.ai/"
+
+    def _prepare_headers(self) -> Dict[str, str]:
+        if not settings.DREAMINTERPRETER_COOKIE:
+            raise ValueError("DREAMINTERPRETER_COOKIE 未在 .env 文件中配置。")
+        
+        return {
+            "accept": "text/x-component",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "content-type": "text/plain;charset=UTF-8",
+            "next-action": "40f12b58f04c47f0b77d33de1b8e910dbff9059260",
+            "next-router-state-tree": "%5B%22%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2C%22%2F%22%2C%22refresh%22%5D%7D%2Cnull%2Cnull%2Ctrue%5D",
+            "origin": "https://dreaminterpreter.ai",
+            "priority": "u=1, i",
+            "referer": "https://dreaminterpreter.ai/",
+            "sec-ch-ua": '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "cookie": settings.DREAMINTERPRETER_COOKIE
+        }
+
+    def _prepare_payload(self, prompt: str) -> str:
+        payload_obj = [{
+            "dream": prompt,
+            "country": "CN",
+            "language": "zh-CN",
+            "userID": str(uuid.uuid4()),
+            "lat": None,
+            "long": None
+        }]
+        return json.dumps(payload_obj)
+
+    def _fix_mojibake(self, text: str) -> str:
+        """修复因错误编码导致的乱码问题"""
+        try:
+            # 尝试将错误的 latin-1 编码字节流重新解码为 utf-8
+            return text.encode('latin-1').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            # 如果转换失败，返回原始文本，避免程序崩溃
+            logger.warning(f"修复乱码失败，返回原始文本: {text[:50]}...")
+            return text
+
+    def _parse_response(self, response_text: str) -> Tuple[str, str]:
+        """
+        实现 [模式：NextJS-RSC-Payload-Extraction]
+        从非标准响应中提取标题和解梦内容，并修复乱码。
+        """
+        try:
+            json_start_index = response_text.find('1:')
+            if json_start_index == -1:
+                raise ValueError("在响应中未找到 '1:' 分隔符。")
+            
+            json_string = response_text[json_start_index + 2:]
+            data = json.loads(json_string)
+            
+            dream_data = data.get("dream", {})
+            title = self._fix_mojibake(dream_data.get("title", "解梦结果"))
+            interpretation = self._fix_mojibake(dream_data.get("interpretation", "未能解析梦境。"))
+            
+            if not title or not interpretation:
+                raise ValueError("解析出的 JSON 中缺少 'title' 或 'interpretation' 字段。")
+                
+            return title, interpretation
+        except Exception as e:
+            logger.error(f"解析上游响应失败: {e}\n响应内容: {response_text[:500]}...")
+            raise ValueError(f"解析上游响应失败: {e}")
+
+    async def chat_completion(self, request_data: Dict[str, Any]) -> StreamingResponse:
+        messages = request_data.get("messages", [])
+        last_user_message = next((m['content'] for m in reversed(messages) if m.get('role') == 'user'), None)
+
+        if not last_user_message:
+            raise HTTPException(status_code=400, detail="请求体中未找到用户消息。")
+
+        async def stream_generator() -> AsyncGenerator[bytes, None]:
+            request_id = f"chatcmpl-{uuid.uuid4()}"
+            model_name = request_data.get("model", settings.DEFAULT_MODEL)
+            
+            try:
+                headers = self._prepare_headers()
+                payload = self._prepare_payload(last_user_message)
+
+                response = self.scraper.post(
+                    self.api_url,
+                    headers=headers,
+                    data=payload,
+                    timeout=settings.API_REQUEST_TIMEOUT
+                )
+                response.raise_for_status()
+                
+                title, interpretation = self._parse_response(response.text)
+                
+                # 【关键修正】将字符串替换操作移出 f-string
+                # 首先，将文本中字面的 "\\n" 替换为实际的换行符，以实现 Markdown 的段落分隔
+                formatted_interpretation = interpretation.replace('\\n', '\n\n')
+                # 然后，安全地构造完整的 Markdown 文本
+                full_text = f"## {title}\n\n{formatted_interpretation}"
+                
+                # 实现 [模式：伪流式生成]
+                chunk_size = 10
+                for i in range(0, len(full_text), chunk_size):
+                    content_chunk = full_text[i:i+chunk_size]
+                    chunk = create_chat_completion_chunk(request_id, model_name, content_chunk)
+                    yield create_sse_data(chunk)
+                    await asyncio.sleep(0.02)
+
+            except Exception as e:
+                logger.error(f"处理流时发生错误: {e}", exc_info=True)
+                error_message = f"内部服务器错误: {str(e)}"
+                error_chunk = create_chat_completion_chunk(request_id, model_name, error_message, "stop")
+                yield create_sse_data(error_chunk)
+            
+            finally:
+                final_chunk = create_chat_completion_chunk(request_id, model_name, "", "stop")
+                yield create_sse_data(final_chunk)
+                yield DONE_CHUNK
+
+        return StreamingResponse(stream_generator(), media_type="text/event-stream")
+
+    async def get_models(self) -> JSONResponse:
+        model_data = {
+            "object": "list",
+            "data": [
+                {"id": name, "object": "model", "created": int(time.time()), "owned_by": "lzA6"}
+                for name in settings.KNOWN_MODELS
+            ]
+        }
+        return JSONResponse(content=model_data)
+
+
+--- 文件路径: app\utils\sse_utils.py ---
+
+import json
+import time
+from typing import Dict, Any, Optional
+
+DONE_CHUNK = b"data: [DONE]\n\n"
+
+def create_sse_data(data: Dict[str, Any]) -> bytes:
+    """将字典数据格式化为 SSE 事件字符串。"""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n".encode('utf-8')
+
+def create_chat_completion_chunk(
+    request_id: str,
+    model: str,
+    content: str,
+    finish_reason: Optional[str] = None
+) -> Dict[str, Any]:
+    """创建一个与 OpenAI 兼容的聊天补全流式块。"""
+    return {
+        "id": request_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": content},
+                "finish_reason": finish_reason
+            }
+        ]
+    }
+
+
+--- 文件路径: static\index.html ---
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DreamInterpreter-2API 测试面板</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>DreamInterpreter-2API</h1>
+            <p>一个将 dreaminterpreter.ai 转换为 OpenAI 格式 API 的代理</p>
+        </div>
+        <div class="api-key-container">
+            <label for="api-key">API Master Key:</label>
+            <input type="password" id="api-key" value="1" placeholder="请输入您的 API Master Key">
+        </div>
+        <div class="chat-container">
+            <div class="input-area">
+                <textarea id="prompt-input" placeholder="在这里输入你的梦境..."></textarea>
+                <button id="send-btn">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" /></svg>
+                </button>
+            </div>
+            <div class="output-area">
+                <div id="result-display" class="markdown-body">
+                    <p class="placeholder">解梦结果将显示在这里...</p>
+                </div>
+                <div id="spinner" class="spinner hidden"></div>
+            </div>
+        </div>
+        <div id="error-message" class="error hidden"></div>
+    </div>
+    <script src="/static/script.js"></script>
+</body>
+</html>
+
+--- 文件路径: static\script.js ---
+
+document.addEventListener('DOMContentLoaded', () => {
+    const apiKeyInput = document.getElementById('api-key');
+    const promptInput = document.getElementById('prompt-input');
+    const sendBtn = document.getElementById('send-btn');
+    const resultDisplay = document.getElementById('result-display');
+    const spinner = document.getElementById('spinner');
+    const errorMessage = document.getElementById('error-message');
+    const placeholder = document.querySelector('.placeholder');
+
+    const md = window.markdownit();
+
+    async function handleSend() {
+        const apiKey = apiKeyInput.value.trim();
+        const prompt = promptInput.value.trim();
+
+        if (!apiKey || !prompt) {
+            showError("请确保 API Key 和梦境内容都已填写。");
+            return;
+        }
+
+        setLoading(true);
+        resultDisplay.innerHTML = '';
+
+        try {
+            const response = await fetch('/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: 'dream-interpreter-pro',
+                    messages: [{ role: 'user', content: prompt }],
+                    stream: true
+                })
+            });
+
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.detail || '请求失败');
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let fullContent = '';
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n\n').filter(line => line.startsWith('data: '));
+
+                for (const line of lines) {
+                    const jsonStr = line.substring(6);
+                    if (jsonStr.trim() === '[DONE]') {
+                        break;
+                    }
+                    try {
+                        const data = JSON.parse(jsonStr);
+                        const content = data.choices[0]?.delta?.content;
+                        if (content) {
+                            fullContent += content;
+                            resultDisplay.innerHTML = md.render(fullContent);
+                        }
+                    } catch (e) {
+                        console.error('Error parsing SSE chunk:', e);
+                    }
+                }
+            }
+        } catch (error) {
+            showError(error.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function setLoading(isLoading) {
+        sendBtn.disabled = isLoading;
+        promptInput.disabled = isLoading;
+        spinner.classList.toggle('hidden', !isLoading);
+        if (isLoading) {
+            placeholder?.classList.add('hidden');
+            hideError();
+        }
+    }
+
+    function showError(message) {
+        errorMessage.textContent = message;
+        errorMessage.classList.remove('hidden');
+    }
+
+    function hideError() {
+        errorMessage.classList.add('hidden');
+    }
+
+    sendBtn.addEventListener('click', handleSend);
+    promptInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
+    });
+});
+
+
+--- 文件路径: static\style.css ---
+
+:root {
+    --bg-color: #f0f2f5;
+    --container-bg: #ffffff;
+    --border-color: #e5e7eb;
+    --text-color: #1f2937;
+    --text-secondary: #6b7280;
+    --primary-color: #4f46e5;
+    --primary-hover: #4338ca;
+    --input-bg: #f9fafb;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    margin: 0;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding-top: 5vh;
+    min-height: 100vh;
+}
+
+.container {
+    width: 100%;
+    max-width: 800px;
+    background-color: var(--container-bg);
+    border-radius: 12px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05);
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.header { text-align: center; }
+.header h1 { margin: 0; }
+.header p { margin: 0.25rem 0 0; color: var(--text-secondary); }
+
+.api-key-container { display: flex; align-items: center; gap: 0.5rem; }
+.api-key-container label { font-weight: 500; }
+.api-key-container input {
+    flex-grow: 1;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background-color: var(--input-bg);
+}
+
+.chat-container {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+}
+
+.input-area {
+    display: flex;
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+#prompt-input {
+    flex-grow: 1;
+    border: none;
+    resize: none;
+    padding: 0.5rem;
+    font-size: 1rem;
+    height: 80px;
+    background: transparent;
+}
+#prompt-input:focus { outline: none; }
+
+#send-btn {
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    width: 40px;
+    height: 40px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s;
+    align-self: flex-end;
+}
+#send-btn:hover { background: var(--primary-hover); }
+#send-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+
+.output-area {
+    padding: 1rem;
+    min-height: 200px;
+    position: relative;
+}
+
+.markdown-body { line-height: 1.6; }
+.markdown-body h2 {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.3em;
+    margin-top: 1.5em;
+    margin-bottom: 1em;
+}
+.markdown-body p { margin: 0 0 1em; }
+.placeholder { color: var(--text-secondary); }
+
+.spinner {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    border: 3px solid rgba(0, 0, 0, 0.1);
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border-left-color: var(--primary-color);
+    animation: spin 1s ease infinite;
+}
+.hidden { display: none; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+.error {
+    color: #b91c1c;
+    background-color: #fee2e2;
+    border: 1px solid #fca5a5;
+    padding: 1rem;
+    border-radius: 6px;
+    text-align: center;
+    margin-top: 1rem;
+}
+
+
+

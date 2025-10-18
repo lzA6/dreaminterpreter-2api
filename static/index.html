@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DreamInterpreter-2API 测试面板</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>DreamInterpreter-2API</h1>
+            <p>一个将 dreaminterpreter.ai 转换为 OpenAI 格式 API 的代理</p>
+        </div>
+        <div class="api-key-container">
+            <label for="api-key">API Master Key:</label>
+            <input type="password" id="api-key" value="1" placeholder="请输入您的 API Master Key">
+        </div>
+        <div class="chat-container">
+            <div class="input-area">
+                <textarea id="prompt-input" placeholder="在这里输入你的梦境..."></textarea>
+                <button id="send-btn">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" /></svg>
+                </button>
+            </div>
+            <div class="output-area">
+                <div id="result-display" class="markdown-body">
+                    <p class="placeholder">解梦结果将显示在这里...</p>
+                </div>
+                <div id="spinner" class="spinner hidden"></div>
+            </div>
+        </div>
+        <div id="error-message" class="error hidden"></div>
+    </div>
+    <script src="/static/script.js"></script>
+</body>
+</html>

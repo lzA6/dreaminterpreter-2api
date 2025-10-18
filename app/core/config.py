@@ -1,0 +1,24 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import List, Optional
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding='utf-8',
+        extra="ignore"
+    )
+
+    APP_NAME: str = "dreaminterpreter-2api"
+    APP_VERSION: str = "1.0.0"
+    DESCRIPTION: str = "一个将 dreaminterpreter.ai 转换为兼容 OpenAI 格式 API 的高性能代理。"
+
+    API_MASTER_KEY: Optional[str] = None
+    DREAMINTERPRETER_COOKIE: Optional[str] = None
+
+    API_REQUEST_TIMEOUT: int = 180
+    NGINX_PORT: int = 8090
+
+    DEFAULT_MODEL: str = "dream-interpreter-pro"
+    KNOWN_MODELS: List[str] = ["dream-interpreter-pro"]
+
+settings = Settings()
